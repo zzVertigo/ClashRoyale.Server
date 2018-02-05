@@ -1,1 +1,1 @@
-# GayRoyale
+# ClashRoyale.Server
