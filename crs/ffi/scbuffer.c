@@ -1,6 +1,7 @@
 #include "ffi.h"
 #include <stdint.h>
 #include <string.h>
+#include <stdbool.h>
 
 static ErlNifResourceType *SCBUFFER;
 typedef uint32_t buf_int_t;
@@ -95,10 +96,78 @@ ERL_FUNC(from) {
     return buf;
 }
 
+/// 24 bit types
+
+#define i24struct(name, type) typedef struct { type b8; type b16; type b24; } name
+#define i24num(i24) ( (i24).b8 | ((i24).b16 << 8) | ((i24).b24 << 16) )
+i24struct(int24_t, int8_t);
+i24struct(uint24_t, uint8_t);
+
+/// Read Functions
+
+#define ERL_READ_SETUP(type)                                                  \
+    type num;                                                                 \
+    sc_buffer_t* buffer;                                                      \
+    if (!enif_get_resource(env, argv[0], SCBUFFER, (void**)&buffer))          \
+        return enif_make_badarg(env);                                         \
+    if (sc_buffer_read(buffer, (buf_data_t)&num, sizeof(num)) != sizeof(num)) \
+        return enif_make_error(env, "Not enough data in SCBuffer");
+
+#define ERL_READ(name, type, is_unsigned) ERL_FUNC(name) { \
+    ERL_READ_SETUP(type);                                  \
+    return enif_make_ok(env, (is_unsigned) ?               \
+        enif_make_uint64(env, num) :                       \
+        enif_make_int64(env, num));                        \
+}
+
+#define ERL_READ_DATA(name, type, after) ERL_FUNC(name) {                 \
+    ErlNifBinary binary;                                                  \
+    binary.data = NULL;                                                   \
+    ERL_READ_SETUP(type);                                                 \
+    if (num < 0)                                                          \
+        return enif_make_error(env, "Invalid length read from SCBuffer"); \
+    if (sc_buffer_read(buffer, (buf_data_t)binary.data, num) != num)      \
+        return enif_make_error(env, "Not enough data in SCBuffer");       \
+    binary.size = num;                                                    \
+    after;                                                                \
+}
+
+#define ERL_READ_24(name, type, is_unsigned) ERL_FUNC(name) { \
+    ERL_READ_SETUP(type);                                     \
+    return enif_make_ok(env, (is_unsigned) ?                  \
+        enif_make_uint(env, i24num(num)) :                    \
+        enif_make_int(env, i24num(num)));                     \
+}
+
+ERL_READ(read_int16, int16_t, false)
+ERL_READ(read_int32, int32_t, false)
+ERL_READ_24(read_int24, int24_t, false)
+ERL_READ(read_int64, int64_t, false)
+ERL_READ(read_uint16, uint16_t, true)
+ERL_READ_24(read_uint24, uint24_t, true)
+ERL_READ(read_uint32, uint32_t, true)
+ERL_READ(read_uint64, uint64_t, true)
+ERL_READ_DATA(read_bytes, int64_t, return enif_make_binary(env, &binary))
+ERL_READ_DATA(read_string, int64_t, return enif_make_string_len(
+    env, (const char*)binary.data, binary.size, ERL_NIF_LATIN1))
+
+/// Module functions
+
 ERL_MOD_FUNCS(reader_funcs) {
     { "new", 1, new },
     { "new", 0, new0 },
-    { "from", 1, from }
+    { "from", 1, from },
+
+    { "read", 1, read_bytes },
+    { "readstr", 1, read_string },
+    { "read16", 1, read_int16 },
+    { "read24", 1, read_int24 },
+    { "read32", 1, read_int32 },
+    { "read64", 1, read_int64 },
+    { "readu16", 1, read_uint16 },
+    { "readu24", 1, read_uint24 },
+    { "readu32", 1, read_uint32 },
+    { "readu64", 1, read_uint64 }
 };
 
 static void cleanup(ErlNifEnv *env, void *obj) {}
